@@ -1,438 +1,181 @@
 <?php
-// ==========================================
-// CONFIGURACIÓN Y DATOS DEL FORMULARIO
-// ==========================================
+require_once __DIR__ . '/auth.php';
+requerir_login();   // si no hay sesión, redirige al login
 
+// URL completa del servicio Flask (antes estaba incompleta)
 $url_flask = getenv('FLASK_URL') ?: 'http://127.0.0.1:5000/procesar';
 
-$form = [
-    'cedula'    => '',
-    'nombre1'   => '',
-    'nombre2'   => '',
-    'apellido1' => '',
-    'apellido2' => '',
-    'telefono'  => '',
-    'direccion' => ''
-];
+// Inicializar variables para los campos
+$cedula = $n1 = $n2 = $a1 = $a2 = $tel = $dir = "";
+$mensaje = "";
+$tipo_mensaje = "exito";
 
-$mensaje = '';
-$tipo_mensaje = '';
-$accion_actual = '';
-
+// Escapar texto para mostrarlo de forma segura en HTML
 function h($valor) {
     return htmlspecialchars((string)$valor, ENT_QUOTES, 'UTF-8');
 }
 
-// ==========================================
-// PROCESAR LOS BOTONES DEL FORMULARIO
-// ==========================================
+// Procesar el formulario al hacer clic en un botón
+if ($_SERVER["REQUEST_METHOD"] == "POST") {
+    $accion = $_POST['accion'] ?? '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Recopilar datos del formulario
+    $datos = [
+        'accion'    => $accion,
+        'cedula'    => trim($_POST['cedula'] ?? ''),
+        'nombre1'   => trim($_POST['nombre1'] ?? ''),
+        'nombre2'   => trim($_POST['nombre2'] ?? ''),
+        'apellido1' => trim($_POST['apellido1'] ?? ''),
+        'apellido2' => trim($_POST['apellido2'] ?? ''),
+        'telefono'  => trim($_POST['telefono'] ?? ''),
+        'direccion' => trim($_POST['direccion'] ?? '')
+    ];
 
-    $accion_actual = $_POST['accion'] ?? '';
+    // Conservar lo que el usuario escribió en los campos
+    $cedula = $datos['cedula'];
+    $n1  = $datos['nombre1'];
+    $n2  = $datos['nombre2'];
+    $a1  = $datos['apellido1'];
+    $a2  = $datos['apellido2'];
+    $tel = $datos['telefono'];
+    $dir = $datos['direccion'];
 
-    // Recoger los campos enviados
-    foreach ($form as $campo => $valor) {
-        $form[$campo] = trim($_POST[$campo] ?? '');
-    }
+    // Enviar datos a Flask mediante JSON
+    $options = [
+        'http' => [
+            'header'        => "Content-Type: application/json\r\nAccept: application/json\r\n",
+            'method'        => 'POST',
+            'content'       => json_encode($datos, JSON_UNESCAPED_UNICODE),
+            'timeout'       => 10,
+            'ignore_errors' => true   // permite leer la respuesta aunque Flask devuelva 400, 409, etc.
+        ],
+    ];
 
-    $acciones_validas = ['guardar', 'consultar', 'editar', 'eliminar'];
+    $context   = stream_context_create($options);
+    $resultado = @file_get_contents($url_flask, false, $context);
 
-    if (!in_array($accion_actual, $acciones_validas, true)) {
-        $mensaje = 'Acción no válida.';
+    if ($resultado === false) {
+        $mensaje = 'No se pudo conectar con Flask. Verifica que el servicio Python (app.py) esté ejecutándose en el puerto 5000.';
         $tipo_mensaje = 'error';
-
-    } elseif ($form['cedula'] === '') {
-        $mensaje = 'Debes ingresar la cédula.';
-        $tipo_mensaje = 'error';
-
-    } elseif (
-        in_array($accion_actual, ['guardar', 'editar'], true)
-        && ($form['nombre1'] === '' || $form['apellido1'] === '')
-    ) {
-        $mensaje = 'El primer nombre y el primer apellido son obligatorios.';
-        $tipo_mensaje = 'error';
-
     } else {
+        $respuesta_json = json_decode($resultado, true);
 
-        // Preparar los datos para Flask
-        $datos = $form;
-        $datos['accion'] = $accion_actual;
-
-        $json = json_encode(
-            $datos,
-            JSON_UNESCAPED_UNICODE
-        );
-
-        if ($json === false) {
-            $mensaje = 'No se pudieron preparar los datos para enviar.';
+        if (!is_array($respuesta_json)) {
+            $mensaje = 'Flask no devolvió una respuesta JSON válida.';
             $tipo_mensaje = 'error';
-
         } else {
+            $mensaje = $respuesta_json['mensaje'] ?? 'Respuesta recibida del servidor.';
 
-            // Enviar JSON a Flask mediante POST
-            $opciones = [
-                'http' => [
-                    'method' => 'POST',
-                    'header' =>
-                        "Content-Type: application/json\r\n" .
-                        "Accept: application/json\r\n",
-                    'content' => $json,
-                    'timeout' => 10,
-                    'ignore_errors' => true
-                ]
-            ];
+            // Código HTTP de la respuesta de Flask
+            $codigo_http = 0;
+            if (isset($http_response_header[0]) &&
+                preg_match('/\s(\d{3})\s/', $http_response_header[0], $m)) {
+                $codigo_http = (int)$m[1];
+            }
+            $tipo_mensaje = ($codigo_http >= 400) ? 'error' : 'exito';
 
-            $contexto = stream_context_create($opciones);
+            // CONSULTAR: rellenar los campos con los datos encontrados
+            if ($accion === 'consultar' && !empty($respuesta_json['datos']) && is_array($respuesta_json['datos'])) {
+                $d = $respuesta_json['datos'];
+                $cedula = $d['cedula']    ?? '';
+                $n1     = $d['nombre1']   ?? '';
+                $n2     = $d['nombre2']   ?? '';
+                $a1     = $d['apellido1'] ?? '';
+                $a2     = $d['apellido2'] ?? '';
+                $tel    = $d['telefono']  ?? '';
+                $dir    = $d['direccion'] ?? '';
+            }
 
-            $resultado = @file_get_contents(
-                $url_flask,
-                false,
-                $contexto
-            );
-
-            if ($resultado === false) {
-                $mensaje =
-                    'No se pudo conectar con Flask. ' .
-                    'Verifica que Python esté ejecutándose en el puerto 5000.';
-                $tipo_mensaje = 'error';
-
-            } else {
-
-                $respuesta = json_decode($resultado, true);
-
-                if (!is_array($respuesta)) {
-                    $mensaje =
-                        'Flask no devolvió una respuesta JSON válida.';
-                    $tipo_mensaje = 'error';
-
-                } else {
-
-                    $mensaje = $respuesta['mensaje']
-                        ?? 'Respuesta recibida del servidor.';
-
-                    // Consultar devuelve los datos del usuario
-                    if (
-                        $accion_actual === 'consultar'
-                        && !empty($respuesta['datos'])
-                        && is_array($respuesta['datos'])
-                    ) {
-                        foreach ($form as $campo => $valor) {
-                            if (array_key_exists($campo, $respuesta['datos'])) {
-                                $form[$campo] =
-                                    (string)($respuesta['datos'][$campo] ?? '');
-                            }
-                        }
-                    }
-
-                    // Determinar si Flask respondió con error HTTP
-                    $codigo_http = 0;
-
-                    if (isset($http_response_header[0])) {
-                        if (preg_match(
-                            '/\s(\d{3})\s/',
-                            $http_response_header[0],
-                            $coincidencias
-                        )) {
-                            $codigo_http = (int)$coincidencias[1];
-                        }
-                    }
-
-                    if ($codigo_http >= 400) {
-                        $tipo_mensaje = 'error';
-                    } else {
-                        $tipo_mensaje = 'exito';
-                    }
-
-                    // Limpiar los campos después de eliminar correctamente
-                    if (
-                        $accion_actual === 'eliminar'
-                        && $codigo_http >= 200
-                        && $codigo_http < 300
-                        && isset($respuesta['mensaje'])
-                        && strpos(
-                            $respuesta['mensaje'],
-                            'Registro eliminado exitosamente.'
-                        ) !== false
-                    ) {
-                        foreach ($form as $campo => $valor) {
-                            $form[$campo] = '';
-                        }
-                    }
-                }
+            // ELIMINAR: limpiar los campos si se eliminó correctamente
+            if ($accion === 'eliminar' && $tipo_mensaje === 'exito' &&
+                strpos($mensaje, 'eliminado exitosamente') !== false) {
+                $cedula = $n1 = $n2 = $a1 = $a2 = $tel = $dir = "";
             }
         }
     }
 }
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Formulario de usuarios</title>
-
+    <title>Formulario de Registro</title>
     <style>
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            padding: 32px 16px;
-            background: #f0f0f0;
-            font-family: Arial, Helvetica, sans-serif;
-            color: #111;
-        }
-
-        .contenedor {
-            width: 100%;
-            max-width: 520px;
-            margin: 0 auto;
-            padding: 16px;
-            background: #dedede;
-            border: 1px solid #aaa;
-        }
-
-        h1 {
-            margin: 0 0 20px;
-            padding: 10px 5px;
-            background: white;
-            border: 1px solid #aaa;
-            text-align: center;
-            font-size: 24px;
-        }
-
-        .campo {
-            display: grid;
-            grid-template-columns: 110px minmax(0, 1fr);
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 9px;
-        }
-
-        label {
-            font-size: 13px;
-            font-weight: bold;
-        }
-
-        input {
-            width: 100%;
-            min-width: 0;
-            height: 33px;
-            padding: 5px 8px;
-            background: #ffff00;
-            border: 1px solid #bbb;
-            font-size: 15px;
-        }
-
-        .botones {
-            display: flex;
-            justify-content: flex-end;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 20px;
-        }
-
-        button {
-            padding: 11px 15px;
-            border: 0;
-            border-radius: 4px;
-            color: white;
-            font-weight: bold;
-            cursor: pointer;
-        }
-
-        button:hover {
-            opacity: .85;
-        }
-
-        .guardar {
-            background: #00e600;
-            color: #000;
-        }
-
-        .consultar {
-            background: #087dc1;
-        }
-
-        .editar {
-            background: #e6a000;
-            color: #000;
-        }
-
-        .eliminar {
-            background: #d93030;
-        }
-
-        .mensaje {
-            margin: 0 0 16px;
-            padding: 12px;
-            border-radius: 4px;
-            overflow-wrap: anywhere;
-            font-size: 14px;
-        }
-
-        .exito {
-            background: #d9f5d9;
-            border: 1px solid #71b771;
-        }
-
-        .error {
-            background: #ffe0e0;
-            border: 1px solid #d88;
-        }
-
-        @media (max-width: 420px) {
-            .campo {
-                grid-template-columns: 95px minmax(0, 1fr);
-                gap: 7px;
-            }
-
-            .contenedor {
-                padding: 12px;
-            }
-
-            button {
-                padding: 10px;
-            }
-        }
+        body { font-family: Arial, sans-serif; background-color: #f0f0f0; display: flex; justify-content: center; padding: 20px; }
+        .contenedor { width: 700px; max-width: 100%; background: #e0e0e0; border: 2px solid #ccc; padding: 15px; border-radius: 5px; }
+        .titulo { text-align: center; font-size: 24px; font-weight: bold; background: white; padding: 10px; margin-bottom: 15px; border: 1px solid #aaa; }
+        .fila { display: flex; margin-bottom: 8px; align-items: center; }
+        .label { width: 120px; font-weight: bold; font-size: 14px; }
+        .input-amarillo { flex-grow: 1; background-color: #ffff00; border: 1px solid #aaa; padding: 6px; font-size: 16px; }
+        .panel-botones { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-top: 20px; }
+        .btn { padding: 10px 15px; font-weight: bold; color: white; border: none; cursor: pointer; flex-grow: 1; margin: 0 4px; border-radius: 3px; }
+        .btn:hover { opacity: .85; }
+        .btn-guardar { background-color: #00ff00; color: black; }
+        .btn-consultar { background-color: #007acc; }
+        .btn-editar { background-color: #ff6600; }
+        .btn-eliminar { background-color: #ff3333; }
+        .btn-pdf { background-color: #7b3fc4; }
+        .btn-excel { background-color: #1d7a3a; }
+        .btn-salir { background-color: white; color: black; border: 1px solid #aaa; }
+        .alert { padding: 10px; margin-bottom: 10px; text-align: center; font-weight: bold; overflow-wrap: anywhere; }
+        .alert.exito { background: #b3ffb3; }
+        .alert.error { background: #ffb3b3; }
     </style>
 </head>
-
 <body>
 
 <div class="contenedor">
-
-    <h1>FORMULARIO</h1>
+    <div class="titulo">FORMULARIO DE REGISTRO</div>
+    <div style="text-align:right; font-size:13px; margin-bottom:10px;">
+        Usuario: <strong><?php echo h($_SESSION['usuario']); ?></strong> |
+        <a href="logout.php">Cerrar sesión</a>
+    </div>
 
     <?php if ($mensaje !== ''): ?>
-        <div class="mensaje <?= h($tipo_mensaje) ?>">
-            <?= h($mensaje) ?>
-        </div>
+        <div class="alert <?php echo h($tipo_mensaje); ?>"><?php echo h($mensaje); ?></div>
     <?php endif; ?>
 
     <form method="POST" action="">
-
-        <div class="campo">
-            <label for="cedula">CÉDULA</label>
-            <input
-                type="text"
-                id="cedula"
-                name="cedula"
-                maxlength="20"
-                value="<?= h($form['cedula']) ?>"
-                required
-            >
+        <div class="fila">
+            <span class="label">CEDULA</span>
+            <input type="text" name="cedula" class="input-amarillo" value="<?php echo h($cedula); ?>" required>
+        </div>
+        <div class="fila">
+            <span class="label">NOMBRE 1</span>
+            <input type="text" name="nombre1" class="input-amarillo" value="<?php echo h($n1); ?>">
+        </div>
+        <div class="fila">
+            <span class="label">NOMBRE 2</span>
+            <input type="text" name="nombre2" class="input-amarillo" value="<?php echo h($n2); ?>">
+        </div>
+        <div class="fila">
+            <span class="label">APELLIDO 1</span>
+            <input type="text" name="apellido1" class="input-amarillo" value="<?php echo h($a1); ?>">
+        </div>
+        <div class="fila">
+            <span class="label">APELLIDO 2</span>
+            <input type="text" name="apellido2" class="input-amarillo" value="<?php echo h($a2); ?>">
+        </div>
+        <div class="fila">
+            <span class="label">TELEFONO</span>
+            <input type="text" name="telefono" class="input-amarillo" value="<?php echo h($tel); ?>">
+        </div>
+        <div class="fila">
+            <span class="label">DIRECCION</span>
+            <input type="text" name="direccion" class="input-amarillo" value="<?php echo h($dir); ?>">
         </div>
 
-        <div class="campo">
-            <label for="nombre1">NOMBRE 1</label>
-            <input
-                type="text"
-                id="nombre1"
-                name="nombre1"
-                maxlength="50"
-                value="<?= h($form['nombre1']) ?>"
-            >
+        <div class="panel-botones">
+            <button type="submit" name="accion" value="guardar" class="btn btn-guardar">GUARDAR</button>
+            <button type="submit" name="accion" value="consultar" class="btn btn-consultar" formnovalidate>CONSULTAR</button>
+            <button type="submit" name="accion" value="editar" class="btn btn-editar" formnovalidate>EDITAR</button>
+            <button type="submit" name="accion" value="eliminar" class="btn btn-eliminar" formnovalidate>ELIMINAR</button>
+            <button type="submit" formaction="imprimir.php" formmethod="post" formtarget="_blank" formnovalidate class="btn btn-pdf">IMPRIMIR PDF</button>
+            <button type="submit" formaction="exportar.php" formmethod="get" formnovalidate class="btn btn-excel">EXCEL</button>
+            <button type="button" class="btn btn-salir" onclick="window.location.href = window.location.pathname;">SALIR</button>
         </div>
-
-        <div class="campo">
-            <label for="nombre2">NOMBRE 2</label>
-            <input
-                type="text"
-                id="nombre2"
-                name="nombre2"
-                maxlength="50"
-                value="<?= h($form['nombre2']) ?>"
-            >
-        </div>
-
-        <div class="campo">
-            <label for="apellido1">APELLIDO 1</label>
-            <input
-                type="text"
-                id="apellido1"
-                name="apellido1"
-                maxlength="50"
-                value="<?= h($form['apellido1']) ?>"
-            >
-        </div>
-
-        <div class="campo">
-            <label for="apellido2">APELLIDO 2</label>
-            <input
-                type="text"
-                id="apellido2"
-                name="apellido2"
-                maxlength="50"
-                value="<?= h($form['apellido2']) ?>"
-            >
-        </div>
-
-        <div class="campo">
-            <label for="telefono">TELÉFONO</label>
-            <input
-                type="text"
-                id="telefono"
-                name="telefono"
-                maxlength="20"
-                value="<?= h($form['telefono']) ?>"
-            >
-        </div>
-
-        <div class="campo">
-            <label for="direccion">DIRECCIÓN</label>
-            <input
-                type="text"
-                id="direccion"
-                name="direccion"
-                maxlength="100"
-                value="<?= h($form['direccion']) ?>"
-            >
-        </div>
-
-        <div class="botones">
-            <button
-                type="submit"
-                name="accion"
-                value="guardar"
-                class="guardar"
-            >
-                GUARDAR
-            </button>
-
-            <button
-                type="submit"
-                name="accion"
-                value="consultar"
-                class="consultar"
-                formnovalidate
-            >
-                CONSULTAR
-            </button>
-
-            <button
-                type="submit"
-                name="accion"
-                value="editar"
-                class="editar"
-                formnovalidate
-            >
-                EDITAR
-            </button>
-
-            <button
-                type="submit"
-                name="accion"
-                value="eliminar"
-                class="eliminar"
-                formnovalidate
-            >
-                ELIMINAR
-            </button>
-        </div>
-
     </form>
 </div>
 

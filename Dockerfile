@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # La base de datos queda FUERA de la carpeta web
-COPY index.php php.php ./web/
+COPY index.php php.php auth.php login.php logout.php imprimir.php exportar.php ./web/
 COPY app.py ./api/
 COPY FORMULARIO.db ./data/FORMULARIO.db
 COPY start.sh ./start.sh
